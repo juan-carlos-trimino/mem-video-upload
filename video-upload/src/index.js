@@ -8,17 +8,56 @@ const express = require("express");
 const mongodb = require("mongodb");
 const amqp = require("amqplib");
 const http = require("http");
+const { randomUUID } = require('crypto');
+const winston = require('winston');
 
 /******
 Globals
 ******/
 //Create a new express instance.
 const app = express();
+const SVC_NAME = "video-upload";
 const SVC_DNS_RABBITMQ = process.env.SVC_DNS_RABBITMQ;
 const SVC_DNS_VIDEO_STORAGE = process.env.SVC_DNS_VIDEO_STORAGE;
 const PORT = process.env.PORT && parseInt(process.env.PORT) || 3000;
 const MAX_RETRIES = process.env.MAX_RETRIES && parseInt(process.env.MAX_RETRIES) || 10;
 let READINESS_PROBE = false;
+
+/***
+Resume Operation
+----------------
+The resume operation strategy intercepts unexpected errors and responds by allowing the process to
+continue.
+***/
+process.on('uncaughtException',
+err => {
+  logger.error(`${SVC_NAME} - Uncaught exception.`);
+  logger.error(err && err.stack || err);
+})
+
+/***
+Abort and Restart
+-----------------
+***/
+// process.on("uncaughtException",
+// err => {
+//   console.error("Uncaught exception:");
+//   console.error(err && err.stack || err);
+//   process.exit(1);
+// })
+
+//Winston requires at least one transport (location to save the log) to create a log.
+const logConfiguration = {
+  transports: [ new winston.transports.Console() ],
+  format: winston.format.combine(
+    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSSSS' }),
+    winston.format.printf(msg => `${msg.timestamp} ${msg.level} ${msg.message}`)
+  ),
+  exitOnError: false
+}
+
+//Create a logger and pass it the Winston configuration object.
+const logger = winston.createLogger(logConfiguration);
 
 /***
 Unlike most other programming languages or runtime environments, Node.js doesn't have a built-in
@@ -29,56 +68,45 @@ Accessing the main module
 When a file is run directly from Node.js, require.main is set to its module. That means that it is
 possible to determine whether a file has been run directly by testing require.main === module.
 ***/
-if (require.main === module)
-{
+if (require.main === module) {
   main()
-  .then(() =>
-  {
+  .then(() => {
     READINESS_PROBE = true;
-    console.log(`Microservice "video-upload" is listening on port "${PORT}"!`);
+    logger.info(`${SVC_NAME} - Microservice is listening on port "${PORT}"!`);
   })
-  .catch(err =>
-  {
-    console.error('Microservice "video-upload" failed to start.');
-    console.error(err && err.stack || err);
+  .catch(err => {
+    logger.error(`${SVC_NAME} - Microservice failed to start.`);
+    logger.error(err && err.stack || err);
   });
 }
 
-function main()
-{
+function main() {
   //Throw an exception if any required environment variables are missing.
-  if (process.env.SVC_DNS_RABBITMQ === undefined)
-  {
+  if (process.env.SVC_DNS_RABBITMQ === undefined) {
     throw new Error('Please specify the name of the service DNS for RabbitMQ in the environment variable SVC_DNS_RABBITMQ.');
   }
-  else if (process.env.SVC_DNS_VIDEO_STORAGE === undefined)
-  {
+  else if (process.env.SVC_DNS_VIDEO_STORAGE === undefined) {
     throw new Error('Please specify the service DNS in the environment variable SVC_DNS_VIDEO_STORAGE.');
   }
   //Display a message if any optional environment variables are missing.
-  else
-  {
-    if (process.env.PORT === undefined)
-    {
-      console.log('The environment variable PORT for the HTTP server is missing; using port 3000.');
+  else {
+    if (process.env.PORT === undefined) {
+      logger.info(`${SVC_NAME} - The environment variable PORT for the HTTP server is missing; using port ${PORT}.`);
     }
     //
-    if (process.env.MAX_RETRIES === undefined)
-    {
-      console.log(`The environment variable MAX_RETRIES is missing; using MAX_RETRIES=${MAX_RETRIES}.`);
+    if (process.env.MAX_RETRIES === undefined) {
+      logger.info(`${SVC_NAME} - The environment variable MAX_RETRIES is missing; using MAX_RETRIES=${MAX_RETRIES}.`);
     }
   }
   //Notify when server has started.
   return requestWithRetry(connectToRabbitMQ, SVC_DNS_RABBITMQ, MAX_RETRIES)  //Connect to RabbitMQ...
-  .then(channel =>                    //then...
-  {
+  .then(channel => {                  //then...
     return startHttpServer(channel);  //start the HTTP server.
   });
 }
 
-function connectToRabbitMQ(url, currentRetry)
-{
-  console.log(`Connecting (${currentRetry}) to 'RabbitMQ' at ${url}.`);
+function connectToRabbitMQ(url, currentRetry) {
+  logger.info(`${SVC_NAME} - Connecting (${currentRetry}) to 'RabbitMQ' at ${url}.`);
   /***
   return connect()
     .then(conn =>
@@ -97,51 +125,41 @@ function connectToRabbitMQ(url, currentRetry)
     });
   ***/
   return amqp.connect(url)
-  .then(conn =>
-  {
-    console.log("Connected to RabbitMQ.");
+  .then(conn => {
+    logger.info(`${SVC_NAME} - Connected to RabbitMQ.`);
     //Create a RabbitMQ messaging channel.
     return conn.createChannel()
-    .then(channel =>
-    {
+    .then(channel => {
       //Assert that we have a "viewed" queue.
       return channel.assertQueue('viewed', { exclusive: false })
-      .then(() =>
-      {
+      .then(() => {
         return channel;
       });
     });
   });
 }
 
-async function sleep(timeout)
-{
-  return new Promise(resolve =>
-  {
+async function sleep(timeout) {
+  return new Promise(resolve => {
     setTimeout(() => { resolve(); }, timeout);
   });
 }
 
-async function requestWithRetry(func, url, maxRetry)
-{
-  for (let currentRetry = 0;;)
-  {
-    try
-    {
+async function requestWithRetry(func, url, maxRetry) {
+  for (let currentRetry = 0;;) {
+    try {
       ++currentRetry;
       return await func(url, currentRetry);
     }
-    catch(err)
-    {
-      if (currentRetry === maxRetry)
-      {
+    catch(err) {
+      if (currentRetry === maxRetry) {
         //Save the error from the most recent attempt.
         lastError = err;
-        console.log(`Maximum number of ${maxRetry} retries has been reached.`);
+        logger.info(`${SVC_NAME} - Maximum number of ${maxRetry} retries has been reached.`);
         break;
       }
       const timeout = (Math.pow(2, currentRetry) - 1) * 100;
-      console.log(`Waiting ${timeout}ms...`);
+      logger.info(`${SVC_NAME} - Waiting ${timeout}ms...`);
       await sleep(timeout);
     }
   }
@@ -150,14 +168,11 @@ async function requestWithRetry(func, url, maxRetry)
 }
 
 //Start the HTTP server.
-function startHttpServer(channel)
-{
+function startHttpServer(channel) {
   //Notify when the server has started.
-  return new Promise(resolve =>
-  {
+  return new Promise(resolve => {
     setupHandlers(channel);
-    app.listen(PORT, () =>
-    {
+    app.listen(PORT, () => {
       //HTTP server is listening, resolve the promise.
       resolve();
     });
@@ -165,51 +180,44 @@ function startHttpServer(channel)
 }
 
 //Setup event handlers.
-function setupHandlers(channel)
-{
+function setupHandlers(channel) {
   //Readiness probe.
   app.get('/readiness',
-  (req, res) =>
-  {
+  (req, res) => {
     res.sendStatus(READINESS_PROBE === true ? 200 : 500);
   });
   //
   //Route for uploading videos.
   app.post('/upload',
-  (req, res) =>
-  {
+  (req, res) => {
+    const cid = req.headers['X-Correlation-Id'];
     const fileName = req.headers['file-name'];
     //Create a new unique ID for the video.
     const videoId = new mongodb.ObjectId() + `/${fileName}`;
     const newHeaders = Object.assign({}, req.headers, { id: videoId });
+    logger.info(`${SVC_NAME} ${cid} - Sending to the video-storage microservice...`);
     streamToHttpPost(req, SVC_DNS_VIDEO_STORAGE, '/upload', newHeaders)
-    .then(() =>
-    {
+    .then(() => {
       res.sendStatus(200);
     })
-    .then(() =>
-    {
+    .then(() => {
       //sendMultipleRecipientMessage(channel, { id: videoId, name: fileName });
       sendSingleRecipientMessage(channel, { id: videoId, name: fileName });
     })
-    .catch(err =>
-    {
-      console.error(`Failed to capture uploaded file ${fileName}.`);
-      console.error(err);
-      console.error(err.stack);
+    .catch(err => {
+      logger.error(`${SVC_NAME} ${cid} - Failed to capture uploaded file ${fileName}.`);
+      logger.error(`${SVC_NAME} ${cid} - ${err}`);
+      logger.error(`${SVC_NAME} ${cid} - ${err.stack}`);
     });
   });
 }
 
 //A Node.js stream to a HTTP POST request.
-function streamToHttpPost(inputStream, uploadHost, uploadRoute, headers)
-{
+function streamToHttpPost(inputStream, uploadHost, uploadRoute, headers) {
   //Wait for it to complete.
-  return new Promise((resolve, reject) =>
-  {
+  return new Promise((resolve, reject) => {
     //Forward the request to the video storage microservice.
-    const forwardRequest = http.request(
-    {
+    const forwardRequest = http.request({
       host: uploadHost,
       path: uploadRoute,
       method: 'POST',
@@ -235,9 +243,8 @@ function sendMultipleRecipientMessage(channel, videoMetadata)
 }
 ***/
 
-function sendSingleRecipientMessage(channel, videoMetadata)
-{
-  console.log('Publishing message on "uploaded" queue.');
+function sendSingleRecipientMessage(channel, videoMetadata) {
+  logger.info(`${SVC_NAME} - Publishing message on "uploaded" queue.`);
   //Define the message payload. This is the data that will be sent with the message.
   const msg = { video: videoMetadata };
   //Convert the message to the JSON format.
