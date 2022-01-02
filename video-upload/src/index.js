@@ -8,7 +8,6 @@ const express = require("express");
 const mongodb = require("mongodb");
 const amqp = require("amqplib");
 const http = require("http");
-const { randomUUID } = require('crypto');
 const winston = require('winston');
 
 /******
@@ -32,7 +31,8 @@ continue.
 process.on('uncaughtException',
 err => {
   logger.error(`${SVC_NAME} - Uncaught exception.`);
-  logger.error(err && err.stack || err);
+  logger.error(`${SVC_NAME} - ${err}`);
+  logger.error(`${SVC_NAME} - ${err.stack}`);
 })
 
 /***
@@ -76,7 +76,8 @@ if (require.main === module) {
   })
   .catch(err => {
     logger.error(`${SVC_NAME} - Microservice failed to start.`);
-    logger.error(err && err.stack || err);
+    logger.error(`${SVC_NAME} - ${err}`);
+    logger.error(`${SVC_NAME} - ${err.stack}`);
   });
 }
 
@@ -195,17 +196,18 @@ function setupHandlers(channel) {
     //Create a new unique ID for the video.
     const videoId = new mongodb.ObjectId() + `/${fileName}`;
     const newHeaders = Object.assign({}, req.headers, { id: videoId });
-    logger.info(`${SVC_NAME} ${cid} - Sending to the video-storage microservice...`);
+    logger.info(`${SVC_NAME} ${cid} - Uploading ${videoId} to the video-storage microservice.`);
     streamToHttpPost(req, SVC_DNS_VIDEO_STORAGE, '/upload', newHeaders)
     .then(() => {
+      logger.info(`${SVC_NAME} ${cid} - Uploaded ${videoId} to the video-storage microservice.`);
       res.sendStatus(200);
     })
     .then(() => {
       //sendMultipleRecipientMessage(channel, { id: videoId, name: fileName });
-      sendSingleRecipientMessage(channel, { id: videoId, name: fileName });
+      sendSingleRecipientMessage(channel, { id: videoId, name: fileName, cid: cid });
     })
     .catch(err => {
-      logger.error(`${SVC_NAME} ${cid} - Failed to capture uploaded file ${fileName}.`);
+      logger.error(`${SVC_NAME} ${cid} - Failed to upload the file ${fileName}.`);
       logger.error(`${SVC_NAME} ${cid} - ${err}`);
       logger.error(`${SVC_NAME} ${cid} - ${err.stack}`);
     });
@@ -244,7 +246,7 @@ function sendMultipleRecipientMessage(channel, videoMetadata)
 ***/
 
 function sendSingleRecipientMessage(channel, videoMetadata) {
-  logger.info(`${SVC_NAME} - Publishing message on "uploaded" queue.`);
+  logger.info(`${SVC_NAME} ${videoMetadata.cid} - Publishing message on "uploaded" queue.`);
   //Define the message payload. This is the data that will be sent with the message.
   const msg = { video: videoMetadata };
   //Convert the message to the JSON format.
