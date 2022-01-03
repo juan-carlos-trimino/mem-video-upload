@@ -191,7 +191,7 @@ function setupHandlers(channel) {
   //Route for uploading videos.
   app.post('/upload',
   (req, res) => {
-    const cid = req.headers['X-Correlation-Id'];
+    const cid = req.headers['x-correlation-id'];
     const fileName = req.headers['file-name'];
     //Create a new unique ID for the video.
     const videoId = new mongodb.ObjectId() + `/${fileName}`;
