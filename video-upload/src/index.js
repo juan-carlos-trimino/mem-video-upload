@@ -191,7 +191,12 @@ function setupHandlers(channel) {
   //Route for uploading videos.
   app.post('/upload',
   (req, res) => {
-    const cid = req.headers['x-correlation-id'];
+  /***
+  In the HTTP protocol, headers are case-insensitive; however, the Express framework converts
+  everything to lower case. Unfortunately, for objects in JavaScript, their property names are
+  case-sensitive.
+  ***/
+  const cid = req.headers['x-correlation-id'];
     const fileName = req.headers['file-name'];
     //Create a new unique ID for the video.
     const videoId = new mongodb.ObjectId() + `/${fileName}`;
