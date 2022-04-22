@@ -9,6 +9,7 @@ const mongodb = require("mongodb");
 const amqp = require("amqplib");
 const http = require("http");
 const winston = require('winston');
+const { randomUUID } = require('crypto');
 
 /******
 Globals
