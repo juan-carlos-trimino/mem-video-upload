@@ -9,6 +9,7 @@ const mongodb = require("mongodb");
 const amqp = require("amqplib");
 const http = require("http");
 const winston = require('winston');
+const { randomUUID } = require('crypto');
 
 /******
 Globals
@@ -106,6 +107,46 @@ function main() {
   });
 }
 
+/***
+The user IP is determined by the following order:
+ 1. X-Client-IP
+ 2. X-Forwarded-For (Header may return multiple IP addresses in the format: "client IP, proxy1 IP, proxy2 IP", so take the the first one.)
+    It's very easy to spoof:
+    $ curl --header "X-Forwarded-For: 1.2.3.4" "http://localhost:3000"
+ 3. CF-Connecting-IP (Cloudflare)
+ 4. Fastly-Client-Ip (Fastly CDN and Firebase hosting header when forwared to a cloud function)
+ 5. True-Client-Ip (Akamai and Cloudflare)
+ 6. X-Real-IP (Nginx proxy/FastCGI)
+ 7. X-Cluster-Client-IP (Rackspace LB, Riverbed Stingray)
+ 8. X-Forwarded, Forwarded-For and Forwarded (Variations of #2)
+ 9. req.connection.remoteAddress
+10. req.socket.remoteAddress
+11. req.connection.socket.remoteAddress
+12. req.info.remoteAddress
+If an IP address cannot be found, it will return null.
+***/
+function getIP(req) {
+  let ip = null;
+  try {
+    ip = req.headers['x-forwarded-for']?.split(',').shift() || req.socket?.remoteAddress || null;
+    /***
+    When the OS is listening with a hybrid IPv4-IPv6 socket, the socket converts an IPv4 address to
+    IPv6 by embedding it within the IPv4-mapped IPv6 address format. This format just prefixes the
+    IPv4 address with :ffff: (or ::ffff: for older mappings).
+    Is the IP an IPv4 address mapped as an IPv6? If yes, extract the Ipv4.
+    ***/
+    const regex = /^:{1,2}(ffff)?:(?!0)(?!.*\.$)((1?\d?\d|25[0-5]|2[0-4]\d)(\.|$)){4}$/i;  //Ignore case.
+    if (ip !== null && regex.test(ip)) {
+      ip = ip.replace(/^.*:/, '');
+    }
+  }
+  catch (err) {
+    ip = null;
+    logger.error(`${SVC_NAME} ${cid} - ${err}`);
+  }
+  return ip;
+}
+
 function connectToRabbitMQ(url, currentRetry) {
   logger.info(`${SVC_NAME} - Connecting (${currentRetry}) to 'RabbitMQ' at ${url}.`);
   /***
@@ -191,12 +232,12 @@ function setupHandlers(channel) {
   //Route for uploading videos.
   app.post('/upload',
   (req, res) => {
-  /***
-  In the HTTP protocol, headers are case-insensitive; however, the Express framework converts
-  everything to lower case. Unfortunately, for objects in JavaScript, their property names are
-  case-sensitive.
-  ***/
-  const cid = req.headers['x-correlation-id'];
+    /***
+    In the HTTP protocol, headers are case-insensitive; however, the Express framework converts
+    everything to lower case. Unfortunately, for objects in JavaScript, their property names are
+    case-sensitive.
+    ***/
+    const cid = req.headers['x-correlation-id'];
     const fileName = req.headers['file-name'];
     //Create a new unique ID for the video.
     const videoId = new mongodb.ObjectId() + `/${fileName}`;
