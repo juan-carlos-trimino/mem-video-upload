@@ -16,7 +16,8 @@ Globals
 ******/
 //Create a new express instance.
 const app = express();
-const SVC_NAME = "video-upload";
+const SVC_NAME = process.env.SVC_NAME;
+const APP_NAME_VER = process.env.APP_NAME_VER;
 const SVC_DNS_RABBITMQ = process.env.SVC_DNS_RABBITMQ;
 const SVC_DNS_VIDEO_STORAGE = process.env.SVC_DNS_VIDEO_STORAGE;
 const PORT = process.env.PORT && parseInt(process.env.PORT) || 3000;
@@ -31,9 +32,9 @@ continue.
 ***/
 process.on('uncaughtException',
 err => {
-  logger.error(`${SVC_NAME} - Uncaught exception.`);
-  logger.error(`${SVC_NAME} - ${err}`);
-  logger.error(`${SVC_NAME} - ${err.stack}`);
+  logger.error('Uncaught exception.', { app:APP_NAME_VER, service:SVC_NAME, requestId:'-1' });
+  logger.error(err, { app:APP_NAME_VER, service:SVC_NAME, requestId:'-1' });
+  logger.error(err.stack, { app:APP_NAME_VER, service:SVC_NAME, requestId:'-1' });
 })
 
 /***
@@ -49,9 +50,14 @@ Abort and Restart
 
 //Winston requires at least one transport (location to save the log) to create a log.
 const logConfiguration = {
-  transports: [ new winston.transports.Console() ],
+  transports: [
+    new winston.transports.Console()
+  ],
   format: winston.format.combine(
-    winston.format.timestamp(), winston.format.json()
+    winston.format.timestamp({
+      format: 'YYYY-MM-DD hh:mm:ss.SSS'
+    }),
+    winston.format.json()
   ),
   exitOnError: false
 }
@@ -72,12 +78,12 @@ if (require.main === module) {
   main()
   .then(() => {
     READINESS_PROBE = true;
-    logger.info(`${SVC_NAME} - Microservice is listening on port "${PORT}"!`);
+    logger.info(`Microservice is listening on port ${PORT}!`, { app:APP_NAME_VER, service:SVC_NAME, requestId:'-1' });
   })
   .catch(err => {
-    logger.error(`${SVC_NAME} - Microservice failed to start.`);
-    logger.error(`${SVC_NAME} - ${err}`);
-    logger.error(`${SVC_NAME} - ${err.stack}`);
+    logger.error('Microservice failed to start.', { app:APP_NAME_VER, service:SVC_NAME, requestId:'-1' });
+    logger.error(err, { app:APP_NAME_VER, service:SVC_NAME, requestId:'-1' });
+    logger.error(err.stack, { app:APP_NAME_VER, service:SVC_NAME, requestId:'-1' });
   });
 }
 
@@ -92,11 +98,11 @@ function main() {
   //Display a message if any optional environment variables are missing.
   else {
     if (process.env.PORT === undefined) {
-      logger.info(`${SVC_NAME} - The environment variable PORT for the HTTP server is missing; using port ${PORT}.`);
+      logger.info(`The environment variable PORT for the HTTP server is missing; using port ${PORT}.`, { app:APP_NAME_VER, service:SVC_NAME, requestId:'-1' });
     }
     //
     if (process.env.MAX_RETRIES === undefined) {
-      logger.info(`${SVC_NAME} - The environment variable MAX_RETRIES is missing; using MAX_RETRIES=${MAX_RETRIES}.`);
+      logger.info(`The environment variable MAX_RETRIES is missing; using MAX_RETRIES=${MAX_RETRIES}.`, { app:APP_NAME_VER, service:SVC_NAME, requestId:'-1' });
     }
   }
   //Notify when server has started.
@@ -141,13 +147,13 @@ function getIP(req) {
   }
   catch (err) {
     ip = null;
-    logger.error(`${SVC_NAME} ${cid} - ${err}`);
+    logger.error(err, { app:APP_NAME_VER, service:SVC_NAME, requestId:'-1' });
   }
   return ip;
 }
 
 function connectToRabbitMQ(url, currentRetry) {
-  logger.info(`${SVC_NAME} - Connecting (${currentRetry}) to 'RabbitMQ' at ${url}.`);
+  logger.info(`Connecting (${currentRetry}) to 'RabbitMQ' at ${url}.`, { app:APP_NAME_VER, service:SVC_NAME, requestId:'-1' });
   /***
   return connect()
     .then(conn =>
@@ -167,7 +173,7 @@ function connectToRabbitMQ(url, currentRetry) {
   ***/
   return amqp.connect(url)
   .then(conn => {
-    logger.info(`${SVC_NAME} - Connected to RabbitMQ.`);
+    logger.info(`Connected to 'RabbitMQ'.`, { app:APP_NAME_VER, service:SVC_NAME, requestId:'-1' });
     //Create a RabbitMQ messaging channel.
     return conn.createChannel()
     .then(channel => {
@@ -196,11 +202,11 @@ async function requestWithRetry(func, url, maxRetry) {
       if (currentRetry === maxRetry) {
         //Save the error from the most recent attempt.
         lastError = err;
-        logger.info(`${SVC_NAME} - Maximum number of ${maxRetry} retries has been reached.`);
+        logger.info(`Maximum number of ${maxRetry} retries has been reached.`, { app:APP_NAME_VER, service:SVC_NAME, requestId:'-1' });
         break;
       }
       const timeout = (Math.pow(2, currentRetry) - 1) * 100;
-      logger.info(`${SVC_NAME} - Waiting ${timeout}ms...`);
+      logger.info(`Waiting ${timeout}ms...`, { app:APP_NAME_VER, service:SVC_NAME, requestId:'-1' });
       await sleep(timeout);
     }
   }
@@ -241,10 +247,10 @@ function setupHandlers(channel) {
     //Create a new unique ID for the video.
     const videoId = new mongodb.ObjectId() + `/${fileName}`;
     const newHeaders = Object.assign({}, req.headers, { id: videoId });
-    logger.info(`${SVC_NAME} ${cid} - Uploading ${videoId} to the video-storage microservice.`);
+    logger.info(`Uploading ${videoId} to the video-storage microservice.`, { app:APP_NAME_VER, service:SVC_NAME, requestId:cid });
     streamToHttpPost(req, SVC_DNS_VIDEO_STORAGE, '/upload', newHeaders)
     .then(() => {
-      logger.info(`${SVC_NAME} ${cid} - Uploaded ${videoId} to the video-storage microservice.`);
+      logger.info(`Uploaded ${videoId} to the video-storage microservice.`, { app:APP_NAME_VER, service:SVC_NAME, requestId:cid });
       res.sendStatus(200);
     })
     .then(() => {
@@ -252,9 +258,9 @@ function setupHandlers(channel) {
       sendSingleRecipientMessage(channel, { id: videoId, name: fileName, cid: cid });
     })
     .catch(err => {
-      logger.error(`${SVC_NAME} ${cid} - Failed to upload the file ${fileName}.`);
-      logger.error(`${SVC_NAME} ${cid} - ${err}`);
-      logger.error(`${SVC_NAME} ${cid} - ${err.stack}`);
+      logger.error(`Failed to upload the file ${fileName}.`, { app:APP_NAME_VER, service:SVC_NAME, requestId:cid });
+      logger.error(err, { app:APP_NAME_VER, service:SVC_NAME, requestId:cid });
+      logger.error(err.stack, { app:APP_NAME_VER, service:SVC_NAME, requestId:cid });
     });
   });
 }
@@ -291,7 +297,7 @@ function sendMultipleRecipientMessage(channel, videoMetadata)
 ***/
 
 function sendSingleRecipientMessage(channel, videoMetadata) {
-  logger.info(`${SVC_NAME} ${videoMetadata.cid} - Publishing message on "uploaded" queue.`);
+  logger.info("Publishing message on 'uploaded' queue.", { app:APP_NAME_VER, service:SVC_NAME, requestId:videoMetadata.cid });
   //Define the message payload. This is the data that will be sent with the message.
   const msg = { video: videoMetadata };
   //Convert the message to the JSON format.
